@@ -3,7 +3,7 @@
 
 这是一个在生产实习中开发的工业机器人二次开发项目，旨在通过基于文本的指令，实现对博创（Betrun）工业机器人轨迹运动的控制。项目利用Modbus TCP协议与机器人进行通信，并通过一个Web界面提供直观的用户交互。
 
-![总体架构图](images/Overall Architecture Diagram_cn.png)
+![总体架构图](images/Overall_Architecture_Diagram_cn.png)
 
 ## 技术栈 (Technology Stack)
 
@@ -14,13 +14,15 @@
     -   **日志**: Python内置的 `logging` 模块用于记录后端操作和调试信息。
     -   **数据转换**: `struct` 模块用于处理浮点数与Modbus寄存器16位整数之间的转换，以适应博创系统的Modbus数据映射（小端模式）。
     -   **文本解析**: `re` (正则表达式) 模块用于解析和规范化用户输入的中文或英文文本指令。
-![后端详细图](images/Backend Detailed Diagram_cn.png)
+
+![后端详细图](images/Backend_Detailed_Diagram_cn.png)
 -   **前端**: HTML, CSS (Tailwind CSS), JavaScript
     -   **界面**: `index.html` 构建了用户操作界面，包括指令输入、状态显示和操作按钮。
     -   **样式**: `Tailwind CSS` 用于快速构建和定制响应式、现代化的用户界面。
     -   **交互**: 原生JavaScript负责处理用户输入、发送HTTP请求到后端API、更新机器人状态显示以及日志输出。
     -   **异步通信**: `fetch API` 用于与后端进行异步数据交互，确保用户界面的流畅性。
-![前端详细图](images/Frontend Detailed Diagram_cn.png)
+
+![前端详细图](images/Frontend_Detailed_Diagram_cn.png)
 
 ## 项目概述 (Project Overview)
 
