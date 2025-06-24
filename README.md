@@ -1,0 +1,2 @@
+# text-based-robot-trajectory-control
+此分支包含用于通过Modbus协议对博创工业机器人进行二次开发的Python和Web应用程序代码。项目旨在实现基于文本指令的机器人轨迹运动控制。
