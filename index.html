@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>机器人文本控制</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        .container {
+            max-width: 800px;
+        }
+        .message-box {
+            background-color: #ffe0b2; /* Orange background for messages */
+            color: #e65100; /* Darker orange text */
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+            border: 1px solid #ff9800;
+        }
+        .log-output {
+            max-height: 400px; /* 限制日志区域最大高度 */
+            overflow-y: auto; /* 允许垂直滚动 */
+            white-space: pre-wrap; /* 保留空白符和换行 */
+            word-wrap: break-word; /* 自动换行 */
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+    <div class="container bg-white shadow-lg rounded-xl p-8 space-y-6">
+        <h1 class="text-3xl font-bold text-gray-800 text-center rounded-md p-2 bg-gradient-to-r from-blue-400 to-indigo-500 text-white shadow-md">
+            机器人文本指令控制
+        </h1>
+
+        <div id="messageDisplay" class="hidden message-box"></div>
+
+        <div class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4">
+            <div class="flex-grow">
+                <label for="commandInput" class="block text-sm font-medium text-gray-700 mb-2">输入指令:</label>
+                <input type="text" id="commandInput"
+                       class="w-full px-4 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500 text-lg"
+                       placeholder="例如: MOVE J1 30 或 SET_SPEED 100">
+                <p class="text-sm text-gray-500 mt-2">支持指令: <code class="bg-gray-100 p-1 rounded">MOVE J&lt;轴号&gt; &lt;角度&gt;</code>, <code class="bg-gray-100 p-1 rounded">SET_SPEED &lt;速度值&gt;</code>, <code class="bg-gray-100 p-1 rounded">AUTO_MODE</code>, <code class="bg-gray-100 p-1 rounded">START_MOVE</code>, <code class="bg-gray-100 p-1 rounded">MONITOR</code>, <code class="bg-gray-100 p-1 rounded">TEST_WRITE_GV0 &lt;值&gt;</code></p>
+            </div>
+            <button id="sendCommandBtn"
+                    class="mt-auto px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition ease-in-out duration-150">
+                发送指令
+            </button>
+        </div>
+
+        <div class="bg-gray-50 p-6 rounded-lg shadow-inner">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">机器人状态与日志:</h2>
+            <div id="logOutput" class="bg-white p-4 rounded-lg border border-gray-200 text-sm text-gray-800 log-output">
+                等待指令...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const commandInput = document.getElementById('commandInput');
+        const sendCommandBtn = document.getElementById('sendCommandBtn');
+        const logOutput = document.getElementById('logOutput');
+        const messageDisplay = document.getElementById('messageDisplay');
+
+        // 后端Flask应用的URL
+        const BACKEND_URL = 'http://127.0.0.1:5000/command'; // 请确保与app.py中运行的地址匹配
+
+        function displayMessage(message, type = 'info') {
+            messageDisplay.textContent = message;
+            messageDisplay.className = `message-box ${type === 'error' ? 'bg-red-100 text-red-700 border-red-300' : 'bg-green-100 text-green-700 border-green-300'}`;
+            messageDisplay.classList.remove('hidden');
+        }
+
+        function appendLog(message) {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString();
+            logOutput.textContent += `[${timeString}] ${message}\n`;
+            logOutput.scrollTop = logOutput.scrollHeight; // 自动滚动到底部
+        }
+
+        sendCommandBtn.addEventListener('click', async () => {
+            const commandText = commandInput.value.trim();
+            if (!commandText) {
+                displayMessage('请输入指令！', 'error');
+                return;
+            }
+
+            appendLog(`发送指令: "${commandText}"...`);
+            messageDisplay.classList.add('hidden'); // 隐藏之前的提示信息
+
+            try {
+                const response = await fetch(BACKEND_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ command: commandText }),
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    appendLog(`指令执行结果: ${data.status}`);
+                    appendLog(`消息: ${data.message}`);
+                    if (data.robot_status) {
+                        appendLog(`机器人模式: ${data.robot_status.mode}`);
+                        appendLog(`程序运行状态: ${data.robot_status.run_status}`);
+                        appendLog(`报警状态: ${data.robot_status.alarm_status}`);
+                        if (data.robot_status.gv0_value !== undefined) {
+                            appendLog(`GV0测试值: ${data.robot_status.gv0_value}`);
+                        }
+                    }
+                    displayMessage(`指令 "${commandText}" 执行成功！`, 'info');
+                } else {
+                    appendLog(`指令执行失败 (HTTP ${response.status}): ${data.message || '未知错误'}`);
+                    displayMessage(`指令 "${commandText}" 执行失败: ${data.message || '未知错误'}`, 'error');
+                }
+            } catch (error) {
+                appendLog(`请求发送失败: ${error}`);
+                displayMessage(`网络或服务器错误: ${error.message}`, 'error');
+            } finally {
+                commandInput.value = ''; // 清空输入框
+            }
+        });
+    </script>
+</body>
+</html>
