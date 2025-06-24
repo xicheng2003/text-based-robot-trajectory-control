@@ -50,7 +50,39 @@
 -   `控制系统编址说明v2.3_201214（scara）.pdf`: 博创机器人控制系统编址说明（版本V2.3），提供了全局变量和Modbus地址的详细信息。
 -   `广东培高科技有限公司控制系统使用说明书202210_解密.pdf`: 广东培高科技有限公司的控制系统使用说明书，提供了关于Betrun控制系统的全面编程和操作指南。
 
-## 快速启动 (Quick Start)
+
+## 如何运行 (How to Run)
+您可以根据自己的需求，选择以下两种方式来运行本项目。
+
+### 方式一：直接运行可执行程序 (推荐)
+这种方式最为简单，无需安装Python或任何依赖环境，适合绝大多数用户。
+
+1.  **下载releases文件**:
+
+    请访问本项目的 Releases页面。在该页面下载最新版本打包好的 .zip 压缩文件。解压后，您会看到可执行文件（如 `Text.based.Robot.Control.Ver.1.0.0.250624-release.exe`）和一个 `config.json` 配置文件。
+
+2.  **配置文件设置**:
+
+    打开 `config.json`，配置`robot`、`motion`、`server`三部分内容。
+
+    一般来说，根据你的机器人网络设置修改 `robot` 部分的变量即可正常使用。
+    ```json
+    {
+     "robot": {
+        "_comment_robot": "这里是机器人的相关配置，请根据实际情况修改IP地址",
+        "ip": "192.168.0.11",
+        "port": 502,
+        "slave_id": 1
+          },
+          ...
+    ```
+3.  **运行程序**:
+
+    保存 `config.json` 文件后，直接双击运行可执行文件。程序启动后，在浏览器中访问 `http://127.0.0.1:5000` 即可打开控制界面。
+
+### 方式二：从源代码运行 (适合开发者)
+如果您希望查看或修改源代码，可以采用此方式。
+
 
 1.  **克隆仓库**:
     ```bash
@@ -61,15 +93,10 @@
     ```bash
     pip install Flask Flask-Cors pymodbus
     ```
-3.  **配置机器人IP**:
-    打开 `app.py`，根据你的机器人实际IP地址修改 `ROBOT_IP` 变量。
+3.  **配置文件设置**:
+    打开 `config.json`，根据你的机器人实际IP地址修改 `ROBOT_IP` 变量。
     ```python
     ROBOT_IP = '192.168.0.11' # <-- 请根据你的机器人实际IP地址修改！
-    ```
-    打开 `index.html`，根据你的后端服务器的实际局域网IP地址修改 `BACKEND_COMMAND_URL` 和 `BACKEND_STATUS_URL`。
-    ```javascript
-    const BACKEND_COMMAND_URL = '[http://172.20.10.8:5000/command](http://172.20.10.8:5000/command)'; // <--- 请在这里修改为你的后端服务器的实际局域网IP地址！
-    const BACKEND_STATUS_URL = '[http://172.20.10.8:5000/status](http://172.20.10.8:5000/status)';   // <--- 例如: '[http://192.168.0.100:5000/status](http://192.168.0.100:5000/status)'
     ```
 4.  **运行后端服务**:
     ```bash
