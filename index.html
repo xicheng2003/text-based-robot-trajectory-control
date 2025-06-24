@@ -188,9 +188,9 @@
         const robotAlarmStatusSpan = document.getElementById('robotAlarmStatus');
         const robotGv0ValueSpan = document.getElementById('robotGv0Value');
 
-        // 后端Flask应用的URL
-        const BACKEND_COMMAND_URL = 'http://172.20.10.8:5000/command'; // <--- 请在这里修改为你的后端服务器的实际局域网IP地址！
-        const BACKEND_STATUS_URL = 'http://172.20.10.8:5000/status';   // <--- 例如: 'http://192.168.0.100:5000/status'
+        // 后端Flask应用的URL(使用相对路径，无需修改)
+        const BACKEND_COMMAND_URL = '/command';
+        const BACKEND_STATUS_URL = '/status';
 
 
         let statusPollingInterval = null; // 用于存储setInterval的ID

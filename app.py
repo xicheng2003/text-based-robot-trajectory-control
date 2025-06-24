@@ -1,3 +1,6 @@
+import json
+import os
+import sys
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS 
 from pymodbus.client import ModbusTcpClient 
@@ -14,16 +17,43 @@ log = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app) # 允许跨域请求，前端才能访问后端API
 
-# --- 机器人Modbus连接配置 ---
-ROBOT_IP = '192.168.0.11' # <-- 请根据你的机器人实际IP地址修改！
-ROBOT_PORT = 502          # 培高系统Modbus TCP默认端口
-SLAVE_ID = 1              # Modbus从站ID，博创系统默认从站地址为1
-
-# Modbus客户端实例，全局维护
 modbus_client = None
 
-# --- 全局运动参数设置 ---
-DEFAULT_SPEED = 100.0 # SET_SPEED 的默认值
+# --- 加载外部配置文件 ---
+def load_config():
+    config_path = 'config.json'
+    if not os.path.exists(config_path):
+        # 如果配置文件不存在，可以抛出错误或创建一个默认的
+        error_message = f"错误：配置文件 '{config_path}' 未找到。请确保该文件与主程序在同一目录下。"
+        print(error_message)
+        # 在实际应用中，你可能希望记录日志并退出
+        raise FileNotFoundError(error_message)
+    
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = json.load(f)
+    
+    # 验证关键配置是否存在
+    if 'robot' not in config or 'ip' not in config['robot']:
+        raise ValueError("配置文件中缺少 'robot.ip' 配置项。")
+        
+    return config
+
+# 在程序启动时加载配置
+try:
+    CONFIG = load_config()
+except (FileNotFoundError, ValueError) as e:
+    # 优雅地处理配置错误
+    log.critical(f"启动失败：{e}")
+    sys.exit(1) # 导入sys模块后使用
+
+# --- 从配置中读取参数 ---
+ROBOT_IP = CONFIG['robot']['ip']
+ROBOT_PORT = CONFIG['robot']['port']
+SLAVE_ID = CONFIG['robot']['slave_id']
+DEFAULT_SPEED = CONFIG['motion']['default_speed']
+SERVER_HOST = CONFIG['server']['host']
+SERVER_PORT = CONFIG['server']['port']
+
 current_speed_setting = DEFAULT_SPEED # 上次设置的速度，初始为默认值
 
 # --- 中文指令映射和标准化函数 ---
@@ -690,4 +720,5 @@ def handle_command():
 
 # Flask 应用启动时运行的函数
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000) # host='0.0.0.0'允许从任何IP访问
+    app.run(debug=True, host=SERVER_HOST, port=SERVER_PORT)
+    # host='0.0.0.0'允许从任何IP访问
