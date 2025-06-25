@@ -22,67 +22,76 @@ from openai import APIStatusError, APIConnectionError, APITimeoutError
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 log = logging.getLogger(__name__)
 
-# --- Flask 应用初始化 ---
-# 核心改动：
-# 1. `static_folder='dist'`：告诉 Flask 静态文件（如 index.html, logo.png）的根目录是 'dist'。
-# 2. `static_url_path='/'`：告诉 Flask 静态文件的URL路径是什么。设置为空字符串意味着 'dist' 目录下的文件可以直接从根URL访问。
-#    例如: 'dist/logo.png' 可以通过 'http://localhost:5000/logo.png' 访问。
-app = Flask(__name__, static_folder='dist', static_url_path='/')
-# CORS(app) # 在生产环境中，由于前后端同源，不再需要CORS。在开发中，由Vite的proxy处理跨域。
+def get_project_root():
+    """
+    获取项目的根目录，智能适应开发环境和打包后的环境。
+    - 在开发模式下(运行.py)，这是 `backend` 目录的上一级。
+    - 在打包后的程序中(.exe)，这是可执行文件所在的目录。
+    """
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        # 程序被 PyInstaller 打包，根目录是 .exe 所在的目录
+        return os.path.dirname(sys.executable)
+    else:
+        # 在开发模式下，根目录是当前脚本(app.py)所在目录(backend)的上一级
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
+# --- 全局路径定义 ---
+PROJECT_ROOT = get_project_root()
+log.info(f"项目根目录已确定为: {PROJECT_ROOT}")
+
+# --- Flask 应用初始化 (托管Vue App) ---
+# 前端静态文件夹的路径总是相对于项目根目录
+static_dir = os.path.join(PROJECT_ROOT, 'frontend', 'dist')
+log.info(f"Flask 静态文件目录设置为: {static_dir}")
+app = Flask(__name__, static_folder=static_dir)
+
+
+# --- 全局变量和配置加载 ---
 modbus_client = None
+current_speed_setting = 100.0 # 默认速度
 
-# --- 加载外部配置文件 ---
 def load_config():
-    config_path = 'config.json'
+    """
+    加载 config.json 文件。
+    - 在开发模式下，它在 `backend` 子目录中。
+    - 在打包后的程序中，它与 .exe 在同一目录（即项目根目录）。
+    """
+    if getattr(sys, 'frozen', False):
+        # 打包后，配置文件在根目录
+        config_path = os.path.join(PROJECT_ROOT, 'config.json')
+    else:
+        # 开发时，配置文件在 backend 子目录
+        config_path = os.path.join(PROJECT_ROOT, 'backend', 'config.json')
+    
+    log.info(f"正在从以下路径加载配置文件: {config_path}")
+
     if not os.path.exists(config_path):
-        error_message = f"错误：配置文件 '{config_path}' 未找到。请确保该文件与主程序在同一目录下。"
-        print(error_message)
-        raise FileNotFoundError(error_message)
-    
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = json.load(f)
-    
-    # 验证关键配置是否存在
-    if 'robot' not in config or 'ip' not in config['robot']:
-        raise ValueError("配置文件中缺少 'robot.ip' 配置项。")
-    if 'llm_config' not in config or 'api_key' not in config['llm_config']:
-        log.warning("配置文件中缺少 'llm_config.api_key'。自然语言控制功能将不可用。")
-        config['llm_config'] = {'api_key': None, 'model_name': 'deepseek-chat', 'api_base_url': 'https://api.deepseek.com/v1'}
+        log.critical(f"错误：配置文件 '{config_path}' 未找到。程序退出。")
+        sys.exit(1)
         
-    return config
+    with open(config_path, 'r', encoding='utf-8') as f:
+        return json.load(f)
 
-# 在程序启动时加载配置
-try:
-    CONFIG = load_config()
-except (FileNotFoundError, ValueError) as e:
-    log.critical(f"启动失败：{e}")
-    sys.exit(1) # 导入sys模块后使用
+CONFIG = load_config()
+ROBOT_IP = CONFIG.get('robot', {}).get('ip')
+ROBOT_PORT = CONFIG.get('robot', {}).get('port', 502)
+SLAVE_ID = CONFIG.get('robot', {}).get('slave_id', 1)
+DEFAULT_SPEED = CONFIG.get('motion', {}).get('default_speed', 100.0)
+SERVER_HOST = CONFIG.get('server', {}).get('host', '127.0.0.1')
+SERVER_PORT = CONFIG.get('server', {}).get('port', 5000)
+LLM_CONFIG = CONFIG.get('llm_config', {})
+current_speed_setting = DEFAULT_SPEED
 
-# --- 从配置中读取参数 ---
-ROBOT_IP = CONFIG['robot']['ip']
-ROBOT_PORT = CONFIG['robot']['port']
-SLAVE_ID = CONFIG['robot']['slave_id']
-DEFAULT_SPEED = CONFIG['motion']['default_speed']
-SERVER_HOST = CONFIG['server']['host']
-SERVER_PORT = CONFIG['server']['port']
-
-# LLM 配置
-LLM_API_KEY = CONFIG['llm_config']['api_key']
-LLM_MODEL_NAME = CONFIG['llm_config']['model_name']
-LLM_API_BASE_URL = CONFIG['llm_config']['api_base_url']
-
-# LLM 客户端
+# --- LLM 客户端初始化 ---
 llm_client = None
-if LLM_API_KEY:
+if LLM_CONFIG.get('api_key'):
     try:
-        llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_API_BASE_URL)
-        log.info(f"DeepSeek LLM 客户端初始化成功。模型: {LLM_MODEL_NAME}, API Base: {LLM_API_BASE_URL}")
+        llm_client = OpenAI(api_key=LLM_CONFIG['api_key'], base_url=LLM_CONFIG.get('api_base_url'))
+        log.info("LLM 客户端初始化成功。")
     except Exception as e:
-        log.error(f"DeepSeek LLM 客户端初始化失败: {e}。自然语言控制将不可用。")
-        llm_client = None
+        log.error(f"LLM 客户端初始化失败: {e}")
 else:
-    log.warning("未配置 DeepSeek API Key。自然语言控制将不可用。")
+    log.warning("未配置 LLM API Key，自然语言控制不可用。")
 
 
 # --- 全局运动参数设置 ---
@@ -1182,47 +1191,33 @@ def _execute_strict_command_action(client, normalized_command_string, response_m
     # response_messages_list 已经在 handle_command 中处理，这里只返回状态和是否触发运动
     return current_status, motion_triggered
 
-# --- 核心改动：服务 Vue 应用 ---
-
-# 移除旧的 @app.route('/')，因为它现在由下面的 catch-all 路由处理
-# @app.route('/')
-# def serve_index():
-#     """旧的路由，不再需要"""
-#     return send_from_directory('.', 'index.html')
-
-
-# 新增：捕获所有路由 (Catch-all Route)
-# 这个路由会匹配所有未被上面API路由捕获的路径
-# 这样，无论是访问根路径'/'，还是Vue Router定义的'/about'等路径，
-# Flask都会返回前端的主页 `index.html`。
-# 之后，Vue Router会在浏览器端接管，并显示正确的页面。
-# 这是支持单页应用(SPA)历史模式(History Mode)路由的标准做法。
+# --- 服务 Vue 前端的 Catch-all 路由 ---
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve_vue_app(path):
-    # 如果请求的路径是 'dist' 文件夹中存在的实际文件(如js, css, png)，则直接发送该文件
+    """托管 Vue 应用的静态文件和主页"""
+    if not os.path.exists(app.static_folder):
+        log.error(f"静态文件目录不存在: {app.static_folder}")
+        return "Frontend files not found. Please ensure the 'frontend/dist' directory exists.", 404
+        
     if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
         return send_from_directory(app.static_folder, path)
-    # 否则，发送 'index.html'，让Vue接管路由
     else:
+        # 对于根路径或未找到的路径，返回 index.html
+        index_path = os.path.join(app.static_folder, 'index.html')
+        if not os.path.exists(index_path):
+            log.error(f"主页文件 index.html 不存在于: {app.static_folder}")
+            return "Application entry point not found.", 404
         return send_from_directory(app.static_folder, 'index.html')
 
 # --- 应用启动 ---
 def open_browser():
-    """
-    在服务启动后，自动打开浏览器访问Web界面。
-    """
-    # 如果host是'0.0.0.0'，浏览器需要访问'127.0.0.1'
+    """自动打开浏览器"""
     host = '127.0.0.1' if SERVER_HOST == '0.0.0.0' else SERVER_HOST
-    url = f"http://{host}:{SERVER_PORT}"
-    webbrowser.open_new_tab(url)
-    
-# Flask 应用启动时运行的函数
+    webbrowser.open_new_tab(f"http://{host}:{SERVER_PORT}")
+
 if __name__ == '__main__':
-    # 使用线程计时器，在1秒后调用open_browser函数，确保Flask服务已启动
-    if not os.environ.get("WERKZEUG_RUN_MAIN"): # 防止在Flask的debug模式下执行两次
-        threading.Timer(1, open_browser).start()
+    if not os.environ.get("WERKZEUG_RUN_MAIN"):
+        threading.Timer(1.25, open_browser).start()
     
-    # 启动Flask应用
-    app.run(debug=True, host=SERVER_HOST, port=SERVER_PORT)
-    # host='0.0.0.0'允许从任何IP访问
+    app.run(host=SERVER_HOST, port=SERVER_PORT, debug=False)
