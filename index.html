@@ -75,9 +75,9 @@
         .school-logo {
             height: 80px; 
             width: 80px; 
-            object-fit: contain; /* 或者 cover，根据图片内容选择 */
-            border-radius: 0; /* 明确移除圆角 */
-            box-shadow: none; /* 明确移除阴影 */
+            object-fit: contain; 
+            border-radius: 0; 
+            box-shadow: none; 
         }
     </style>
 </head>
@@ -89,29 +89,36 @@
 
         <div id="messageDisplay" class="hidden message-box"></div>
 
-        <div class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4">
+        <div class="flex flex-col md:flex-row gap-4"> <!-- 使用gap-4代替space-y和space-x -->
             <div class="flex-grow">
-                <label for="commandInput" class="block text-sm font-medium text-gray-700 mb-2">输入指令 (多行):</label>
+                <label for="commandInput" class="block text-sm font-medium text-gray-700 mb-2">输入指令 (可使用自然语言 Powered by DeepSeek):</label>
                 <textarea id="commandInput" rows="5"
                           class="w-full px-4 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500 text-lg"
-                          placeholder="例如:&#10;AUTO_MODE&#10;设置速度 50&#10;移动 J1 30&#10;回零 J2&#10;全轴回零&#10;暂停运动&#10;继续运动">
+                          placeholder="例如:&#10;让关节1转动30度，然后把速度设为50。&#10;再让X轴前进100毫米，最后全轴回零。&#10;&#10;或者直接输入严格指令:&#10;AUTO_MODE&#10;SET_SPEED 100&#10;MOVE J1 30">
                 </textarea>
-                <p class="text-sm text-gray-500 mt-2">支持指令: 
-                    <code class="bg-gray-100 p-1 rounded">AUTO_MODE</code> / <code class="bg-gray-100 p-1 rounded">自动模式</code>, 
-                    <code class="bg-gray-100 p-1 rounded">SET_SPEED [&lt;速度值&gt;]</code> / <code class="bg-gray-100 p-1 rounded">设置速度 [&lt;速度值&gt;]</code> (默认100), 
-                    <code class="bg-gray-100 p-1 rounded">MOVE J&lt;1-6&gt; &lt;角度&gt;</code> / <code class="bg-gray-100 p-1 rounded">移动 J&lt;1-6&gt; &lt;角度&gt;</code>, 
-                    <code class="bg-gray-100 p-1 rounded">MOVE X/Y/Z/A/B/C &lt;距离/角度&gt;</code> / <code class="bg-gray-100 p-1 rounded">移动 X/Y/Z/A/B/C &lt;距离/角度&gt;</code>, 
-                    <code class="bg-gray-100 p-1 rounded">GO_HOME_J&lt;1-6&gt;</code> / <code class="bg-gray-100 p-1 rounded">回零 J&lt;1-6&gt;</code>, 
-                    <code class="bg-gray-100 p-1 rounded">GO_HOME_ALL</code> / <code class="bg-gray-100 p-1 rounded">全轴回零</code>, 
-                    <code class="bg-gray-100 p-1 rounded">PAUSE_MOVE</code> / <code class="bg-gray-100 p-1 rounded">暂停运动</code>, 
-                    <code class="bg-gray-100 p-1 rounded">CONTINUE_MOVE</code> / <code class="bg-gray-100 p-1 rounded">继续运动</code>, 
-                    <code class="bg-gray-100 p-1 rounded">STOP_MOVE</code> / <code class="bg-gray-100 p-1 rounded">停止运动</code>, 
-                    <code class="bg-gray-100 p-1 rounded">MONITOR</code> / <code class="bg-gray-100 p-1 rounded">状态监控</code>, 
-                    <code class="bg-gray-100 p-1 rounded">TEST_WRITE_GV0 &lt;值&gt;</code> / <code class="bg-gray-100 p-1 rounded">测试写入GV0 &lt;值&gt;</code>
+                <p class="text-sm text-gray-500 mt-2">
+                    操作说明: 您可以使用日常语言描述指令，例如 "让关节1转动30度，速度设置为50，然后全轴回零。" 系统将尝试理解并执行。
+                    <br>
+                    <br>如果输入无法被LLM理解或您希望精确控制，也可以直接输入以下**严格格式指令** (支持中英文别名):
+                    <br><code class="bg-gray-100 p-1 rounded">AUTO_MODE</code>, 
+                    <code class="bg-gray-100 p-1 rounded">SET_SPEED [&lt;速度值&gt;]</code>, 
+                    <code class="bg-gray-100 p-1 rounded">MOVE J&lt;1-6&gt; &lt;角度&gt;</code>, 
+                    <br>
+                    <code class="bg-gray-100 p-1 rounded">MOVE X/Y/Z/A/B/C &lt;距离/角度&gt;</code>, 
+                    <code class="bg-gray-100 p-1 rounded">GO_HOME_J&lt;1-6&gt;</code>, 
+                    <code class="bg-gray-100 p-1 rounded">GO_HOME_ALL</code>, 
+                    <br>
+                    <code class="bg-gray-100 p-1 rounded">PAUSE_MOVE</code>, 
+                    <code class="bg-gray-100 p-1 rounded">CONTINUE_MOVE</code>, 
+                    <code class="bg-gray-100 p-1 rounded">STOP_MOVE</code>, 
+                    <br>
+                    <code class="bg-gray-100 p-1 rounded">MONITOR</code>, 
+                    <code class="bg-gray-100 p-1 rounded">TEST_WRITE_GV0 &lt;值&gt;</code>.
+                    <br>
                 </p>
                 <p class="text-sm text-gray-500 mt-1">注意: <code class="bg-gray-100 p-1 rounded">MOVE</code> 或 <code class="bg-gray-100 p-1 rounded">GO_HOME</code> 指令会自动启动运动并等待完成。批处理中每条运动指令都会依次执行。</p>
             </div>
-            <div class="flex flex-col space-y-2 mt-auto">
+            <div class="flex flex-col gap-2 mt-auto"> <!-- 使用gap-2 -->
                 <button id="sendCommandBtn"
                         class="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition ease-in-out duration-150">
                     发送指令
@@ -132,19 +139,19 @@
             </div>
         </div>
 
-        <div class="bg-gray-50 p-6 rounded-lg shadow-inner">
+        <div class="bg-gray-50 p-6 rounded-lg shadow-inner mt-6"> <!-- 增加mt-6 -->
             <h2 class="text-xl font-semibold text-gray-800 mb-4">机器人状态与日志:</h2>
             <div id="logOutput" class="bg-white p-4 rounded-lg border border-gray-200 text-sm text-gray-800 log-output">
                 等待指令...
             </div>
-            <div class="text-sm text-gray-600 mt-2">
+            <div class="text-sm text-gray-600 mt-4"> <!-- 增加mt-4 -->
                 <div class="flex flex-wrap gap-x-4 gap-y-2">
                     <span>当前模式: <span id="robotMode">未知</span></span>
                     <span>运行状态: <span id="robotRunStatus">未知</span></span>
                     <span>报警状态: <span id="robotAlarmStatus">未知</span></span>
                     <span>GV0测试值: <span id="robotGv0Value">N/A</span></span>
                 </div>
-                <div class="flex flex-wrap gap-x-4 gap-y-2 mt-2">
+                <div class="flex flex-wrap gap-x-4 gap-y-2 mt-4"> <!-- 增加mt-4 -->
                     <label for="pollInterval" class="font-semibold">状态轮询间隔 (ms):</label>
                     <input type="number" id="pollInterval" value="1000" min="100" max="5000" step="100"
                            class="w-24 px-2 py-1 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500">
@@ -155,11 +162,11 @@
     </div>
 
     <footer class="w-full max-w-4xl mt-8 p-4 text-gray-600 text-sm flex justify-between items-center bg-white shadow-md rounded-lg">
-        <div class="flex items-center space-x-4">
-            <img src="https://www.gdut.edu.cn/images2020/footer-logo2.png" alt="广东工业大学校徽" class="school-logo" onerror="this.onerror=null; this.src='https://placehold.co/80x80/cccccc/333333?text=校徽';">
+        <div class="flex items-center gap-4"> <!-- 使用gap-4 -->
+            <img src="https://www.gdut.edu.cn/images2020/footer-logo2.png" alt="gdut_logo" class="school-logo" onerror="this.onerror=null; this.src='logo.png';">
             <div>
                 <p class="font-semibold">广东工业大学</p>
-                <p class="font-semibold">Made with ❤️ by Xicheng2003</p>
+                <p class="font-semibold">Made with ❤️ by <a href="https://github.com/xicheng2003/text-based-robot-trajectory-control/" target="_blank" rel="noopener noreferrer">xicheng2003</a></p>
             </div>
         </div>
         <div class="text-right">
@@ -176,7 +183,7 @@
         const loadingSpinner = document.getElementById('loadingSpinner');
 
         const pauseBtn = document.getElementById('pauseBtn');
-        const continueBtn = document.getElementById('continueBtn'); // New Continue button
+        const continueBtn = document.getElementById('continueBtn'); 
         const stopBtn = document.getElementById('stopBtn');
         const homeAllBtn = document.getElementById('homeAllBtn');
         const pollIntervalInput = document.getElementById('pollInterval');
@@ -193,8 +200,8 @@
         const BACKEND_STATUS_URL = '/status';
 
 
-        let statusPollingInterval = null; // 用于存储setInterval的ID
-        let currentPollInterval = parseInt(pollIntervalInput.value, 10); // 当前轮询间隔，从input初始化
+        let statusPollingInterval = null; 
+        let currentPollInterval = parseInt(pollIntervalInput.value, 10); 
 
         function displayMessage(message, type = 'info') {
             messageDisplay.textContent = message;
@@ -212,7 +219,6 @@
         function updateRobotStatusDisplay(statusData) {
             robotModeSpan.textContent = statusData.mode || '未知';
             robotRunStatusSpan.textContent = statusData.run_status || '未知';
-            // 关键：在前端也增加一个console.log来确认接收到的报警状态
             console.log(`Received alarm_status: ${statusData.alarm_status}, code: ${statusData.alarm_code}`); 
             robotAlarmStatusSpan.textContent = statusData.alarm_status || '未知';
             robotGv0ValueSpan.textContent = statusData.gv0_value !== undefined && statusData.gv0_value !== null ? statusData.gv0_value.toFixed(3) : 'N/A';
@@ -248,20 +254,20 @@
                     const isStopped = data.robot_status.run_status === '停止';
                     const noAlarm = data.robot_status.alarm_status === '无报警';
 
-                    if (isStopped && noAlarm) { // 不再检查 statusPollingInterval 避免循环问题
-                        stopPolling(); // 调用停止函数
+                    if (isStopped && noAlarm) { 
+                        stopPolling(); 
                         appendLog("机器人运动已完成，状态轮询已停止。");
                         displayMessage("指令执行完毕，机器人已停止。", "success");
-                        loadingSpinner.classList.add('hidden'); // 停止加载动画
-                        sendCommandBtn.disabled = false; // 启用按钮
+                        loadingSpinner.classList.add('hidden'); 
+                        sendCommandBtn.disabled = false; 
                     }
                 } else {
                     appendLog(`获取状态失败: ${data.message || '未知错误'}`);
-                    stopPolling(); // 调用停止函数
+                    stopPolling(); 
                     appendLog("获取状态失败，状态轮询已停止。");
                     displayMessage("获取机器人状态失败。", "error");
-                    loadingSpinner.classList.add('hidden'); // 停止加载动画
-                    sendCommandBtn.disabled = false; // 启用按钮
+                    loadingSpinner.classList.add('hidden'); 
+                    sendCommandBtn.disabled = false; 
                 }
             } catch (error) {
                 appendLog(`状态轮询请求失败: ${error}`);
@@ -270,8 +276,8 @@
                     statusPollingInterval = null;
                     appendLog("网络或服务器错误，状态轮询已停止。");
                     displayMessage("状态轮询过程中出现网络或服务器错误。", "error");
-                    loadingSpinner.classList.add('hidden'); // 停止加载动画
-                    sendCommandBtn.disabled = false; // 启用按钮
+                    loadingSpinner.classList.add('hidden'); 
+                    sendCommandBtn.disabled = false; 
                 }
             }
         }
@@ -284,7 +290,7 @@
 
         // 预设按钮事件监听器
         pauseBtn.addEventListener('click', () => fillCommandAndFocus('PAUSE_MOVE'));
-        continueBtn.addEventListener('click', () => fillCommandAndFocus('CONTINUE_MOVE')); // New Continue button listener
+        continueBtn.addEventListener('click', () => fillCommandAndFocus('CONTINUE_MOVE')); 
         stopBtn.addEventListener('click', () => fillCommandAndFocus('STOP_MOVE'));
         homeAllBtn.addEventListener('click', () => fillCommandAndFocus('GO_HOME_ALL'));
 
@@ -313,10 +319,10 @@
 
             appendLog(`发送指令批次:\n"${commandText.split('\n').map(c => `- ${c.trim()}`).join('\n')}"`);
             messageDisplay.classList.add('hidden'); 
-            sendCommandBtn.disabled = true; // 禁用按钮防止重复点击
-            loadingSpinner.classList.remove('hidden'); // 显示加载动画
+            sendCommandBtn.disabled = true; 
+            loadingSpinner.classList.remove('hidden'); 
 
-            stopPolling(); // 停止任何现有的轮询，准备重新开始
+            stopPolling(); 
 
 
             try {
@@ -325,36 +331,34 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ commands: commandText }), // 传递 commands
+                    body: JSON.stringify({ commands: commandText }), 
                 });
 
                 const data = await response.json();
 
                 if (response.ok) {
                     appendLog(`指令批次处理结果: ${data.status}`);
-                    // 显示详细的每条指令执行结果
                     data.detailed_results.forEach(res => {
                         appendLog(`  - 命令 "${res.command}": ${res.message} (${res.status})`);
                     });
                     
-                    if (data.robot_status) { // 立即更新一次状态显示
+                    if (data.robot_status) { 
                         updateRobotStatusDisplay(data.robot_status);
                     }
                     
-                    // 根据批处理的最终结果和是否有运动启动，决定是否开始轮询
                     if (data.status === "success" && data.motion_started) { 
                         appendLog("机器人运动已启动，开始状态轮询。");
-                        startPolling(); // 启动轮询
+                        startPolling(); 
                     } else if (data.status === "error") {
                         displayMessage(`指令批次执行失败: ${data.message}`, 'error');
-                        loadingSpinner.classList.add('hidden'); // 停止加载动画
-                        sendCommandBtn.disabled = false; // 启用按钮
-                        pollRobotStatus(); // 错误发生时，获取一次最终状态
-                    } else { // 成功但没有运动启动
+                        loadingSpinner.classList.add('hidden'); 
+                        sendCommandBtn.disabled = false; 
+                        pollRobotStatus(); 
+                    } else { 
                         displayMessage(`指令批次处理完成，但未启动运动: ${data.message}`, 'info');
-                        loadingSpinner.classList.add('hidden'); // 停止加载动画
-                        sendCommandBtn.disabled = false; // 启用按钮
-                        pollRobotStatus(); // 确保更新了最终状态
+                        loadingSpinner.classList.add('hidden'); 
+                        sendCommandBtn.disabled = false; 
+                        pollRobotStatus(); 
                     }
 
                 } else {
@@ -365,7 +369,6 @@
                     pollRobotStatus(); 
                 }
             }
-            // Catching fetch errors
             catch (error) {
                 appendLog(`请求发送失败: ${error}`);
                 displayMessage(`网络或服务器错误: ${error.message}`, 'error');
@@ -373,7 +376,7 @@
                 sendCommandBtn.disabled = false; 
                 pollRobotStatus(); 
             } finally {
-                commandInput.value = ''; // 清空输入框
+                commandInput.value = ''; 
             }
         });
 

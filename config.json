@@ -13,5 +13,11 @@
     "_comment_server": "这里是Web服务器的配置,host='0.0.0.0'允许从任何IP访问",
     "host": "0.0.0.0", 
     "port": 5000
+  },
+  "llm_config": {
+    "_comment": "DeepSeek LLM API 配置，请替换为你的API Key",
+    "api_key": "sk-4eb89c8260594eee9ef860f4924980fb", 
+    "model_name": "deepseek-chat", 
+    "api_base_url": "https://api.deepseek.com/v1"
   }
 }

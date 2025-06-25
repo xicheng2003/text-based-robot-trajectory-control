@@ -8,9 +8,14 @@ from pymodbus.exceptions import ModbusException
 import struct
 import time
 import logging
-import re # 导入正则表达式模块
-import threading # 用于创建延迟执行的线程 以确保在Flask服务完全启动
-import webbrowser # 用于控制浏览器 待服务启动后自动打开网页
+import re
+import threading
+import webbrowser
+
+# LLM 相关的导入
+from openai import OpenAI
+from openai import APIStatusError, APIConnectionError, APITimeoutError
+
 
 # 配置日志，设置为INFO级别，便于查看关键操作，DEBUG级别用于更详细的Modbus通信日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -25,10 +30,8 @@ modbus_client = None
 def load_config():
     config_path = 'config.json'
     if not os.path.exists(config_path):
-        # 如果配置文件不存在，可以抛出错误或创建一个默认的
         error_message = f"错误：配置文件 '{config_path}' 未找到。请确保该文件与主程序在同一目录下。"
         print(error_message)
-        # 在实际应用中，你可能希望记录日志并退出
         raise FileNotFoundError(error_message)
     
     with open(config_path, 'r', encoding='utf-8') as f:
@@ -37,6 +40,9 @@ def load_config():
     # 验证关键配置是否存在
     if 'robot' not in config or 'ip' not in config['robot']:
         raise ValueError("配置文件中缺少 'robot.ip' 配置项。")
+    if 'llm_config' not in config or 'api_key' not in config['llm_config']:
+        log.warning("配置文件中缺少 'llm_config.api_key'。自然语言控制功能将不可用。")
+        config['llm_config'] = {'api_key': None, 'model_name': 'deepseek-chat', 'api_base_url': 'https://api.deepseek.com/v1'}
         
     return config
 
@@ -44,7 +50,6 @@ def load_config():
 try:
     CONFIG = load_config()
 except (FileNotFoundError, ValueError) as e:
-    # 优雅地处理配置错误
     log.critical(f"启动失败：{e}")
     sys.exit(1) # 导入sys模块后使用
 
@@ -56,6 +61,25 @@ DEFAULT_SPEED = CONFIG['motion']['default_speed']
 SERVER_HOST = CONFIG['server']['host']
 SERVER_PORT = CONFIG['server']['port']
 
+# LLM 配置
+LLM_API_KEY = CONFIG['llm_config']['api_key']
+LLM_MODEL_NAME = CONFIG['llm_config']['model_name']
+LLM_API_BASE_URL = CONFIG['llm_config']['api_base_url']
+
+# LLM 客户端
+llm_client = None
+if LLM_API_KEY:
+    try:
+        llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_API_BASE_URL)
+        log.info(f"DeepSeek LLM 客户端初始化成功。模型: {LLM_MODEL_NAME}, API Base: {LLM_API_BASE_URL}")
+    except Exception as e:
+        log.error(f"DeepSeek LLM 客户端初始化失败: {e}。自然语言控制将不可用。")
+        llm_client = None
+else:
+    log.warning("未配置 DeepSeek API Key。自然语言控制将不可用。")
+
+
+# --- 全局运动参数设置 ---
 current_speed_setting = DEFAULT_SPEED # 上次设置的速度，初始为默认值
 
 # --- 中文指令映射和标准化函数 ---
@@ -123,6 +147,145 @@ def normalize_command(command_text):
 
     # 如果没有已知模式匹配，返回原始大写文本，这将在后续处理中被识别为错误。
     return command_text_upper
+
+# --- LLM API 调用和解析函数 ---
+LLM_SYSTEM_PROMPT = """
+你是一个机器人指令解析器，你的任务是将用户的自然语言指令转化为一个结构化的JSON数组，其中包含机器人可以执行的操作序列。
+请严格按照以下规则和JSON格式输出，不要包含任何额外的文本或解释。
+
+**输出格式:**
+你的输出必须是一个JSON对象，包含一个`commands`数组和一个可选的`error`字段。
+```json
+{
+  "commands": [
+    { "command_type": "<类型>", "parameters": { ... } },
+    { "command_type": "<类型>", "parameters": { ... } }
+  ],
+  "error": null // 如果解析成功，error为null
+}
+```
+
+**支持的命令类型 (command_type) 及其参数 (parameters):**
+
+1.  **SET_SPEED**: 设置机器人运动速度。
+    * `parameters`: `{"speed_value": <float>}` (例如: `{"speed_value": 100.0}`)
+    * 如果用户未指定速度，请使用默认值 `100.0`。
+
+2.  **MOVE_JOINT**: 关节增量运动。
+    * `parameters`: `{"axis_id": <int>, "angle": <float>}`
+        * `axis_id`: 1到6的整数，表示关节J1到J6。
+        * `angle`: 浮点数，表示移动的度数。
+    * 例如: `{"axis_id": 1, "angle": 30.0}`
+
+3.  **MOVE_BASE**: 基坐标系增量运动 (直线或姿态)。
+    * `parameters`: `{"axis_name": <str>, "value": <float>}`
+        * `axis_name`: 字符串 "X", "Y", "Z", "A", "B", "C"。
+        * `value`: 浮点数，表示X/Y/Z的距离(毫米)或A/B/C的角度(度)。
+    * 例如: `{"axis_name": "X", "value": 50.0}`
+
+4.  **GO_HOME_JOINT**: 单轴回零。
+    * `parameters`: `{"axis_id": <int>}` (1到6的整数)。
+    * 例如: `{"axis_id": 1}`
+
+5.  **GO_HOME_ALL**: 全轴回零。
+    * `parameters`: `{}` (空对象)
+
+6.  **PAUSE_MOVE**: 暂停当前运动。
+    * `parameters`: `{}` (空对象)
+
+7.  **CONTINUE_MOVE**: 继续暂停的运动。
+    * `parameters`: `{}` (空对象)
+
+8.  **STOP_MOVE**: 停止当前运动。
+    * `parameters`: `{}` (空对象)
+
+9.  **MONITOR**: 监控机器人状态 (不执行动作，仅获取最新状态)。
+    * `parameters`: `{}` (空对象)
+
+10. **TEST_WRITE_GV0**: 向GV0写入一个测试值。
+    * `parameters`: `{"value": <float>}`
+    * 例如: `{"value": 123.45}`
+
+**错误处理:**
+如果用户的指令无法理解，或者解析出的参数不合法（例如轴号超出范围，非数字值等），请返回如下JSON，并在`error`字段说明错误类型，`commands`数组为空。
+```json
+{
+  "commands": [],
+  "error": "PARSE_ERROR",
+  "message": "无法理解您的指令或参数不合法，请提供更清晰的描述，并确保参数在有效范围内。"
+}
+```
+
+**重要提示:**
+* 所有数值参数必须是浮点数 (float)。
+* `axis_id` 必须是整数。
+* 如果用户未指定 `SET_SPEED` 的速度值，请在JSON中自动填充 `100.0`。
+* 请确保在处理连续指令时，保持合理的执行顺序。
+* 不要返回任何Markdown格式，只返回纯JSON。
+
+**示例:**
+
+用户输入: "让关节1转动30度，然后把速度设为50，再让X轴前进100毫米，最后全轴回零。"
+期望JSON:
+```json
+{
+  "commands": [
+    { "command_type": "MOVE_JOINT", "parameters": {"axis_id": 1, "angle": 30.0} },
+    { "command_type": "SET_SPEED", "parameters": {"speed_value": 50.0} },
+    { "command_type": "MOVE_BASE", "parameters": {"axis_name": "X", "value": 100.0} },
+    { "command_type": "GO_HOME_ALL", "parameters": {} }
+  ],
+  "error": null
+}
+```
+"""
+
+def call_llm_api(user_query):
+    """
+    调用 DeepSeek LLM API 解析自然语言指令。
+    返回解析后的结构化命令列表或错误信息。
+    """
+    if not llm_client:
+        log.error("LLM 客户端未初始化。请检查 API Key 配置。")
+        return {"commands": [], "error": "LLM_NOT_CONFIGURED", "message": "后端LLM服务未正确配置或API Key缺失。"}
+
+    messages = [
+        {"role": "system", "content": LLM_SYSTEM_PROMPT},
+        {"role": "user", "content": user_query}
+    ]
+
+    try:
+        log.info(f"调用 LLM API 进行解析，查询: '{user_query[:50]}...'")
+        chat_completion = llm_client.chat.completions.create(
+            model=LLM_MODEL_NAME,
+            messages=messages,
+            response_format={"type": "json_object"} # 明确要求JSON输出
+        )
+        
+        llm_response_content = chat_completion.choices[0].message.content
+        log.debug(f"LLM 原始响应: {llm_response_content}")
+
+        # 尝试解析LLM返回的JSON
+        parsed_llm_output = json.loads(llm_response_content)
+        
+        # 验证LLM返回的结构
+        if "commands" in parsed_llm_output and isinstance(parsed_llm_output["commands"], list):
+            # 可以在这里对LLM解析出的commands进行进一步的参数合法性校验
+            # 例如，确保axis_id是1-6，value是数字等
+            return parsed_llm_output
+        else:
+            log.error(f"LLM 返回的JSON结构不符合预期: {llm_response_content}")
+            return {"commands": [], "error": "LLM_PARSE_FAIL", "message": "LLM返回了不符合预期的JSON结构。"}
+
+    except json.JSONDecodeError as e:
+        log.error(f"LLM 返回的不是有效JSON: {llm_response_content}。错误: {e}")
+        return {"commands": [], "error": "LLM_INVALID_JSON", "message": "LLM未能返回有效JSON，请尝试更清晰的指令。"}
+    except (APIStatusError, APIConnectionError, APITimeoutError) as e:
+        log.error(f"调用 DeepSeek API 失败: {e}")
+        return {"commands": [], "error": "LLM_API_ERROR", "message": f"LLM服务连接失败或返回错误: {e.status_code if hasattr(e, 'status_code') else '未知错误'}"}
+    except Exception as e:
+        log.error(f"调用 LLM 过程中发生未知异常: {e}")
+        return {"commands": [], "error": "LLM_UNKNOWN_ERROR", "message": f"LLM解析过程中发生未知错误: {e}"}
 
 # --- 辅助函数：浮点数与Modbus寄存器值转换 ---
 def float_to_modbus_registers(float_value):
@@ -202,7 +365,7 @@ def _execute_modbus_write_single(client, address, value, operation_name):
         return None
     except Exception as e:
         log.error(f"{operation_name} 过程中发生未知错误: {e}")
-        return False
+        return None
 
 def _execute_modbus_write_multiple(client, address, values, operation_name):
     """通用Modbus写多个寄存器函数"""
@@ -220,7 +383,7 @@ def _execute_modbus_write_multiple(client, address, values, operation_name):
         return None
     except Exception as e:
         log.error(f"{operation_name} 过程中发生未知错误: {e}")
-        return False
+        return None
 
 # --- 机器人Modbus控制封装 ---
 def connect_modbus_client():
@@ -319,7 +482,7 @@ def start_incremental_move_modbus(coordinate_type):
         value = 0x40 # 按关节坐标增量运动
         op_name = "启动关节坐标系增量运动"
     elif coordinate_type == 'base_coords':
-        value = 0x41 # 按基坐标增量运动
+        value = 0x41 # 按基坐标系增量运动
         op_name = "启动基坐标系增量运动"
     else:
         log.error(f"无效的运动坐标类型: {coordinate_type}")
@@ -483,6 +646,124 @@ def _wait_for_motion_completion(client, timeout=30, poll_interval=0.5):
     log.warning(f"运动超时 ({timeout} 秒)。机器人可能仍在运行或未更新状态。请手动检查。")
     return False
 
+def _execute_parsed_command_action(client, parsed_command_data, response_messages_list, original_command_text):
+    """
+    执行一个LLM或严格解析后的单条命令。
+    返回 (是否成功, 是否触发了运动且需要等待完成)
+    """
+    command_type = parsed_command_data.get("command_type")
+    parameters = parsed_command_data.get("parameters", {})
+    
+    current_status = "success"
+    current_message = f"指令 '{command_type}' 执行成功。"
+    motion_triggered = False
+
+    try:
+        if command_type == "AUTO_MODE":
+            success = set_robot_auto_mode_modbus()
+            current_message = "机器人已尝试切换到自动模式。" if success else "切换自动模式失败。"
+            if not success: current_status = "error"
+        
+        elif command_type == "SET_SPEED":
+            speed_val = parameters.get("speed_value", DEFAULT_SPEED)
+            # 更新全局速度设置，因为SET_SPEED不触发运动，但影响后续MOVE
+            global current_speed_setting 
+            current_speed_setting = speed_val
+            success = set_move_speed_modbus(current_speed_setting)
+            current_message = f"已设置运动速度参数为 {current_speed_setting}。" if success else "设置运动速度失败。"
+            if not success: current_status = "error"
+
+        elif command_type in ["MOVE_JOINT", "MOVE_BASE"]:
+            axis_id = parameters.get("axis_id") # for MOVE_JOINT
+            axis_name = parameters.get("axis_name") # for MOVE_BASE
+            value = parameters.get("value")
+            
+            offsets_payload = {}
+            coordinate_type = 'joint' # Default
+            
+            if command_type == "MOVE_JOINT":
+                if not (1 <= axis_id <= 6):
+                    raise ValueError(f"关节轴号无效: J{axis_id}。")
+                offsets_payload[axis_id] = value
+                current_message = f"已设置关节J{axis_id}增量运动参数为 {value} 度。"
+            else: # MOVE_BASE
+                if axis_name not in ['X', 'Y', 'Z', 'A', 'B', 'C']:
+                    raise ValueError(f"基坐标轴名称无效: {axis_name}。")
+                offsets_payload[axis_name] = value
+                coordinate_type = 'base_coords'
+                current_message = f"已设置基坐标系 {axis_name} 轴增量运动参数为 {value}。"
+
+            # 启动运动
+            speed_set_ok = set_move_speed_modbus(current_speed_setting) # 再次确保速度已设置
+            offset_set_ok = _send_incremental_offsets_modbus(modbus_client, offsets_payload, coordinate_type)
+
+            if speed_set_ok and offset_set_ok:
+                start_ok = start_incremental_move_modbus(coordinate_type)
+                if start_ok:
+                    current_message += " 运动已启动。"
+                    motion_triggered = True
+                else:
+                    current_message += " 启动运动失败。"
+                    current_status = "error"
+            else:
+                current_message += " 启动运动前设置参数失败。"
+                current_status = "error"
+
+        elif command_type == "GO_HOME_JOINT":
+            axis_id = parameters.get("axis_id")
+            if not (1 <= axis_id <= 6):
+                raise ValueError(f"关节轴号无效: J{axis_id}。")
+            success = go_home_single_axis_modbus(axis_id)
+            current_message = f"已发送J{axis_id}单轴回零指令。" if success else f"发送J{axis_id}单轴回零指令失败。"
+            if success: motion_triggered = True
+            if not success: current_status = "error"
+
+        elif command_type == "GO_HOME_ALL":
+            success = go_home_all_modbus()
+            current_message = "已发送全轴回零指令。" if success else "发送全轴回零指令失败。"
+            if success: motion_triggered = True
+            if not success: current_status = "error"
+
+        elif command_type == "PAUSE_MOVE":
+            success = pause_move_modbus()
+            current_message = "已发送暂停运动指令。" if success else "发送暂停运动指令失败。"
+            if not success: current_status = "error"
+        
+        elif command_type == "CONTINUE_MOVE":
+            success = continue_move_modbus()
+            current_message = "已发送继续运动指令。" if success else "发送继续运动指令失败。"
+            if not success: current_status = "error"
+
+        elif command_type == "STOP_MOVE":
+            success = stop_move_modbus()
+            current_message = "已发送停止运动指令。" if success else "发送停止运动指令失败。"
+            if not success: current_status = "error"
+
+        elif command_type == "MONITOR":
+            current_message = "状态监控指令 (前端将轮询状态)。"
+
+        elif command_type == "TEST_WRITE_GV0":
+            value = parameters.get("value")
+            success = write_gv0_test_value_modbus(value)
+            current_message = f"已向GV0写入测试值 {value}。" if success else "向GV0写入测试值失败。"
+            if not success: current_status = "error"
+
+        else:
+            current_message = f"未知或不支持的指令类型: {command_type}。"
+            current_status = "error"
+
+    except ValueError as e:
+        current_message = f"指令参数错误: {e}。"
+        current_status = "error"
+    except Exception as e:
+        log.error(f"执行指令 '{original_command_text}' ({command_type}) 时发生异常: {e}", exc_info=True)
+        current_message = f"执行指令时发生内部错误: {e}。"
+        current_status = "error"
+
+    response_messages_list.append({"command": original_command_text, "status": current_status, "message": current_message})
+    
+    return current_status, motion_triggered
+
 
 # --- Flask 路由和API ---
 
@@ -505,13 +786,15 @@ def get_status_api():
 def handle_command():
     global current_speed_setting 
     data = request.get_json()
-    commands_text = data.get('commands', '').strip() 
+    user_input_commands_text = data.get('commands', '').strip() 
 
-    log.info(f"收到指令批次:\n{commands_text}")
+    log.info(f"收到用户指令批次:\n{user_input_commands_text}")
 
-    response_messages = []
+    response_messages = [] # 用于记录每条子指令的执行结果
     overall_status = "success"
     batch_motion_started = False # 标记本次批处理是否有运动真正被启动
+    
+    parsed_commands_to_execute = [] # 存储最终要执行的结构化命令列表
 
     # 连接到机器人Modbus客户端
     if not connect_modbus_client():
@@ -521,190 +804,101 @@ def handle_command():
     if not set_robot_auto_mode_modbus():
         return jsonify({"status": "error", "message": "无法切换机器人到自动模式，运动无法执行。", "motion_started": False})
     
-    # 按行处理指令
-    for line in commands_text.split('\n'):
-        original_command_line = line.strip() # 保存原始行用于日志
-        processed_command = normalize_command(original_command_line) # 先规范化指令
+    # --- 阶段1：尝试解析严格格式指令 (优先处理) ---
+    is_strict_format_batch = False
+    temp_strict_parsed_commands = [] # 临时存放严格解析的命令
+
+    for line in user_input_commands_text.split('\n'):
+        original_line_strip = line.strip()
+        if not original_line_strip: continue
+
+        normalized_strict_command = normalize_command(original_line_strip)
         
-        if not processed_command:
-            if original_command_line: # 如果原始行不为空，但规范化后为空，说明是无法识别的命令
-                response_messages.append({"command": original_command_line, "status": "error", "message": "无法识别的指令格式。"})
+        # 判断是否是严格格式指令 (通过规范化函数是否能将其转换为标准的英文指令格式)
+        # 简单判断：如果规范化后的指令以已知命令类型开头且不含无法识别的字符，则认为是严格格式
+        # 复杂模式的判断会更复杂，这里仅为示例
+        is_known_strict_format = False
+        for cmd_type in ["AUTO_MODE", "SET_SPEED", "MOVE", "GO_HOME", "PAUSE_MOVE", "CONTINUE_MOVE", "STOP_MOVE", "MONITOR", "TEST_WRITE_GV0"]:
+            if normalized_strict_command.startswith(cmd_type):
+                is_known_strict_format = True
+                break
+        
+        if is_known_strict_format:
+            # 对于严格模式，我们依然需要提取参数，这里简化处理，直接让LLM解析函数处理
+            # 传递一个LLM解析函数能接受的简单结构，稍后_execute_parsed_command_action会调用LLM
+            # 这里是为了兼容两种流程使用同一个执行器
+            # 实际上在_execute_parsed_command_action内部会再次解析这个string
+            temp_strict_parsed_commands.append({
+                "command_type": "STRICT_FORMAT_PLACEHOLDER", # 标记这是严格格式，需要特殊处理
+                "parameters": {"original_command_string": original_line_strip}
+            })
+        else:
+            # 如果任何一行不符合严格格式，则整个批次都视为自然语言
+            is_strict_format_batch = False 
+            break # 只要有一行不严格，就跳出，转为LLM处理
+    else: # 如果循环没有被break
+        is_strict_format_batch = True
+        parsed_commands_to_execute = temp_strict_parsed_commands
+
+    # --- 阶段2：如果不是严格格式，使用 LLM 解析自然语言 ---
+    if not is_strict_format_batch:
+        log.info("用户输入不符合严格格式，尝试使用 LLM 解析自然语言指令...")
+        if not llm_client:
+            return jsonify({"status": "error", "message": "未配置LLM服务，无法处理自然语言指令。", "motion_started": False})
+
+        llm_parse_result = call_llm_api(user_input_commands_text)
+        
+        if llm_parse_result["error"]:
+            overall_status = "error"
+            response_messages.append({
+                "command": user_input_commands_text,
+                "status": "error",
+                "message": f"LLM解析失败: {llm_parse_result.get('message', '未知错误')} (代码: {llm_parse_result.get('error', 'UNKNOWN_ERROR')})"
+            })
+            log.error(f"LLM 解析失败: {llm_parse_result.get('message', '未知错误')}")
+        else:
+            log.info(f"LLM 解析成功，得到 {len(llm_parse_result['commands'])} 条指令。")
+            parsed_commands_to_execute = llm_parse_result["commands"]
+            # 检查LLM解析后的指令是否有效
+            if not parsed_commands_to_execute:
+                 overall_status = "error"
+                 response_messages.append({
+                    "command": user_input_commands_text,
+                    "status": "warning",
+                    "message": "LLM未能解析出任何可执行指令，请尝试更清晰的描述。"
+                })
+
+    # --- 阶段3：执行解析后的指令序列 ---
+    if overall_status == "success": # 只有LLM或严格解析成功后才执行
+        for cmd_data in parsed_commands_to_execute:
+            # 对于 STRICT_FORMAT_PLACEHOLDER，需要再次调用 normalize_command
+            if cmd_data.get("command_type") == "STRICT_FORMAT_PLACEHOLDER":
+                original_strict_cmd_str = cmd_data["parameters"]["original_command_string"]
+                # 再次规范化，这次是真正的执行解析
+                executable_cmd_str = normalize_command(original_strict_cmd_str) 
+                log.info(f"执行严格格式指令: '{executable_cmd_str}'")
+                # 传入一个模拟的结构给 _execute_parsed_command_action
+                # 它会根据前缀再次解析
+                execute_result_status, motion_triggered_in_step = \
+                    _execute_parsed_command_action(modbus_client, {"command_type": "STRICT_EXEC", "parameters": {"normalized_command_string": executable_cmd_str}}, response_messages, original_strict_cmd_str)
+            else:
+                # 执行LLM解析出的结构化命令
+                log.info(f"执行LLM解析指令: '{cmd_data.get('command_type')}' parameters: {cmd_data.get('parameters')}")
+                execute_result_status, motion_triggered_in_step = \
+                    _execute_parsed_command_action(modbus_client, cmd_data, response_messages, original_command_text) # Use original_command_text here if it's a single natural language input
+
+            if execute_result_status == "error":
                 overall_status = "error"
-            continue # 跳过空行或无法识别的行
+                break # 某个指令执行失败，中断整个批处理
 
-        log.info(f"--- 处理规范化指令: {processed_command} ---")
-        
-        current_command_status = "success"
-        current_command_message = ""
-        motion_triggered_in_line = False # 标记当前行是否触发了运动且需要等待完成
-
-        try:
-            if processed_command == "AUTO_MODE":
-                current_command_message = "机器人已处于自动模式 (已在批处理开始前设置)。"
-            
-            elif processed_command.startswith("MOVE J") or \
-                 processed_command.startswith("MOVE X") or \
-                 processed_command.startswith("MOVE Y") or \
-                 processed_command.startswith("MOVE Z") or \
-                 processed_command.startswith("MOVE A") or \
-                 processed_command.startswith("MOVE B") or \
-                 processed_command.startswith("MOVE C"):
-                
-                parts = processed_command.split()
-                if len(parts) == 3 and parts[0] == "MOVE":
-                    axis_part = parts[1]
-                    value_str = parts[2]
-                    
-                    try:
-                        value = float(value_str)
-                        offsets_payload = {}
-                        coordinate_type = 'joint' 
-                        
-                        if axis_part.startswith("J"): # Joint move
-                            axis_id = int(axis_part[1:])
-                            if 1 <= axis_id <= 6:
-                                offsets_payload[axis_id] = value
-                                current_command_message = f"已解析关节J{axis_id}增量运动参数为 {value} 度。"
-                            else:
-                                current_command_message = "MOVE指令中的轴号无效，应为J1到J6。"
-                                current_command_status = "error"
-                        else: # Base coordinate move (X,Y,Z,A,B,C)
-                            axis_name = axis_part.upper()
-                            if axis_name in ['X', 'Y', 'Z', 'A', 'B', 'C']:
-                                offsets_payload[axis_name] = value
-                                coordinate_type = 'base_coords'
-                                current_command_message = f"已解析基坐标系 {axis_name} 轴增量运动参数为 {value}。"
-                            else:
-                                current_command_message = "MOVE指令中的坐标轴名称无效，应为X/Y/Z/A/B/C。"
-                                current_command_status = "error"
-
-                        if current_command_status == "success": 
-                            # 1. 设置速度 (使用当前全局速度设置)
-                            speed_set_ok = set_move_speed_modbus(current_speed_setting)
-                            
-                            # 2. 设置关节/基坐标系偏移量
-                            offset_set_ok = _send_incremental_offsets_modbus(modbus_client, offsets_payload, coordinate_type)
-
-                            if speed_set_ok and offset_set_ok:
-                                # 3. 启动运动
-                                start_ok = start_incremental_move_modbus(coordinate_type)
-                                if start_ok:
-                                    motion_triggered_in_line = True
-                                    batch_motion_started = True 
-                                else:
-                                    current_command_message = f"启动运动失败。"
-                                    current_command_status = "error"
-                            else:
-                                current_command_message = f"启动运动前设置参数失败。"
-                                current_command_status = "error"
-
-                    except ValueError:
-                        current_command_message = "MOVE指令参数格式错误，请检查值是否为数字。"
-                        current_command_status = "error"
-                else:
-                    current_command_message = "MOVE指令格式错误，应为 'MOVE <轴/坐标> <值>'。"
-                    current_command_status = "error"
-
-            elif processed_command.startswith("SET_SPEED"):
-                parts = processed_command.split()
-                speed_val = DEFAULT_SPEED 
-                if len(parts) == 2: 
-                    try:
-                        speed_val = float(parts[1])
-                    except ValueError:
-                        current_command_message = f"SET_SPEED指令参数格式错误，速度值应为数字，将使用默认值 {DEFAULT_SPEED}。"
-                        current_command_status = "warning" 
-                elif len(parts) == 1: 
-                    current_command_message = f"SET_SPEED指令无参数，将使用默认值 {DEFAULT_SPEED}。"
-                else: 
-                    current_command_message = f"SET_SPEED指令格式错误，将使用默认值 {DEFAULT_SPEED}。"
-                    current_command_status = "warning"
-                
-                current_speed_setting = speed_val 
-                if current_command_status != "warning": 
-                     current_command_message = f"已设置运动速度参数为 {current_speed_setting}。"
-                
-            elif processed_command == "MONITOR":
-                current_command_message = "前端状态轮询已触发。"
-                
-            elif processed_command.startswith("TEST_WRITE_GV0"):
-                parts = processed_command.split()
-                if len(parts) == 2:
-                    try:
-                        value = float(parts[1])
-                        success = write_gv0_test_value_modbus(value)
-                        current_command_message = f"已向GV0写入测试值 {value}。" if success else "向GV0写入测试值失败。"
-                        if not success: current_command_status = "error"
-                    except ValueError:
-                        current_command_message = "TEST_WRITE_GV0指令参数格式错误，值应为数字。"
-                        current_command_status = "error"
-                else:
-                    current_command_message = "TEST_WRITE_GV0指令格式错误，应为 'TEST_WRITE_GV0 <值>'。"
-                    current_command_status = "error"
-            
-            elif processed_command == "GO_HOME_ALL":
-                success = go_home_all_modbus()
-                current_command_message = "已发送全轴回零指令。" if success else "发送全轴回零指令失败。"
-                if success: motion_triggered_in_line = True 
-                if not success: current_command_status = "error"
-
-            elif processed_command.startswith("GO_HOME_J"):
-                parts = processed_command.split('J')
-                if len(parts) == 2:
-                    try:
-                        axis_id = int(parts[1])
-                        if 1 <= axis_id <= 6:
-                            success = go_home_single_axis_modbus(axis_id)
-                            current_command_message = f"已发送J{axis_id}单轴回零指令。" if success else f"发送J{axis_id}单轴回零指令失败。"
-                            if success: motion_triggered_in_line = True
-                            if not success: current_command_status = "error"
-                        else:
-                            current_command_message = "GO_HOME_J指令中的轴号无效，应为J1到J6。"
-                            current_command_status = "error"
-                    except ValueError:
-                        current_command_message = "GO_HOME_J指令格式错误，轴号应为数字。"
-                        current_command_status = "error"
-                else:
-                    current_command_message = "GO_HOME_J指令格式错误，应为 'GO_HOME_J<轴号>'。"
-                    current_command_status = "error"
-
-            elif processed_command == "PAUSE_MOVE":
-                success = pause_move_modbus()
-                current_command_message = "已发送暂停运动指令。" if success else "发送暂停运动指令失败。"
-                if not success: current_command_status = "error"
-            
-            elif processed_command == "CONTINUE_MOVE": # New: Handle CONTINUE_MOVE
-                success = continue_move_modbus()
-                current_command_message = "已发送继续运动指令。" if success else "发送继续运动指令失败。"
-                if not success: current_command_status = "error"
-
-            elif processed_command == "STOP_MOVE":
-                success = stop_move_modbus()
-                current_command_message = "已发送停止运动指令。" if success else "发送停止运动指令失败。"
-                if not success: current_command_status = "error"
-            
-            else: # 未知或手动START_MOVE
-                current_command_message = "未知指令或指令格式错误。"
-                current_command_status = "error"
-
-        except Exception as e:
-            current_command_message = f"处理指令 '{original_command_line}' 时发生异常: {e}"
-            current_command_status = "error"
-        
-        response_messages.append({"command": original_command_line, "status": current_command_status, "message": current_command_message})
-        
-        if current_command_status == "error":
-            overall_status = "error" # 如果任何一个指令失败，整体状态就是error
-            break # 出现错误立即停止批处理
-        
-        # 如果当前指令是运动指令，等待其完成
-        if motion_triggered_in_line and overall_status != "error":
-            log.info(f"等待 '{original_command_line}' 运动完成...")
-            motion_completed_successfully = _wait_for_motion_completion(modbus_client)
-            if not motion_completed_successfully:
-                overall_status = "error"
-                response_messages.append({"command": f"等待 '{original_command_line}' 完成", "status": "error", "message": "运动未完成或发生报警，批处理中断。"})
-                break # 运动未完成，中断整个批处理
+            if motion_triggered_in_step:
+                batch_motion_started = True
+                log.info(f"等待当前运动完成 (来自 {original_command_text or cmd_data.get('command_type')})...")
+                motion_completed_successfully = _wait_for_motion_completion(modbus_client)
+                if not motion_completed_successfully:
+                    overall_status = "error"
+                    response_messages.append({"command": original_command_text, "status": "error", "message": "运动未完成或发生报警，批处理中断。"})
+                    break # 运动未完成，中断整个批处理
 
     # 获取机器人最新状态
     current_robot_status_info = get_robot_status_modbus()
@@ -721,6 +915,272 @@ def handle_command():
     return jsonify(final_response)
 
 
+def _execute_parsed_command_action(client, parsed_command_data, response_messages_list, original_command_line):
+    """
+    这是一个核心执行函数，它根据解析出的结构化命令类型来调用相应的Modbus函数。
+    它现在也处理STRICT_EXEC类型，直接解析其内部的字符串指令。
+    返回 (执行状态, 是否触发了运动且需要等待完成)
+    """
+    command_type = parsed_command_data.get("command_type")
+    parameters = parsed_command_data.get("parameters", {})
+    
+    current_status = "success"
+    current_message = f"指令 '{original_command_line}' 执行成功。" # Use original line for message
+    motion_triggered = False
+
+    try:
+        # 特殊处理 STRICT_EXEC 类型，它内部包含一个严格格式的字符串指令
+        if command_type == "STRICT_EXEC":
+            normalized_cmd_str = parameters.get("normalized_command_string", "")
+            # 重新解析严格格式指令，进行实际的执行
+            return _execute_strict_command_action(client, normalized_cmd_str, response_messages_list, original_command_line)
+
+        # 以下是LLM解析出的各种结构化命令的执行逻辑
+        elif command_type == "AUTO_MODE":
+            success = set_robot_auto_mode_modbus()
+            current_message = "机器人已尝试切换到自动模式。" if success else "切换自动模式失败。"
+            if not success: current_status = "error"
+        
+        elif command_type == "SET_SPEED":
+            speed_val = parameters.get("speed_value", DEFAULT_SPEED) # Use default if not provided by LLM
+            # Update global speed setting
+            global current_speed_setting 
+            current_speed_setting = speed_val
+            success = set_move_speed_modbus(current_speed_setting)
+            current_message = f"已设置运动速度参数为 {current_speed_setting}。" if success else "设置运动速度失败。"
+            if not success: current_status = "error"
+
+        elif command_type in ["MOVE_JOINT", "MOVE_BASE"]:
+            axis_id = parameters.get("axis_id") # for MOVE_JOINT
+            axis_name = parameters.get("axis_name") # for MOVE_BASE
+            value = parameters.get("value")
+            
+            offsets_payload = {}
+            coordinate_type = 'joint' 
+            
+            if command_type == "MOVE_JOINT":
+                if not isinstance(axis_id, int) or not (1 <= axis_id <= 6):
+                    raise ValueError(f"关节轴号无效或缺失: J{axis_id}。")
+                offsets_payload[axis_id] = float(value) # Ensure float
+                current_message = f"已设置关节J{axis_id}增量运动参数为 {value} 度。"
+            else: # MOVE_BASE
+                if not isinstance(axis_name, str) or axis_name.upper() not in ['X', 'Y', 'Z', 'A', 'B', 'C']:
+                    raise ValueError(f"基坐标轴名称无效或缺失: {axis_name}。")
+                offsets_payload[axis_name.upper()] = float(value) # Ensure float
+                coordinate_type = 'base_coords'
+                current_message = f"已设置基坐标系 {axis_name} 轴增量运动参数为 {value}。"
+
+            # 启动运动
+            speed_set_ok = set_move_speed_modbus(current_speed_setting) # Ensure speed is set before every move
+            offset_set_ok = _send_incremental_offsets_modbus(client, offsets_payload, coordinate_type)
+
+            if speed_set_ok and offset_set_ok:
+                start_ok = start_incremental_move_modbus(coordinate_type)
+                if start_ok:
+                    current_message += " 运动已启动。"
+                    motion_triggered = True
+                else:
+                    current_message += " 启动运动失败。"
+                    current_status = "error"
+            else:
+                current_message += " 启动运动前设置参数失败。"
+                current_status = "error"
+
+        elif command_type == "GO_HOME_JOINT":
+            axis_id = parameters.get("axis_id")
+            if not isinstance(axis_id, int) or not (1 <= axis_id <= 6):
+                raise ValueError(f"关节轴号无效或缺失: J{axis_id}。")
+            success = go_home_single_axis_modbus(axis_id)
+            current_message = f"已发送J{axis_id}单轴回零指令。" if success else f"发送J{axis_id}单轴回零指令失败。"
+            if success: motion_triggered = True
+            if not success: current_status = "error"
+
+        elif command_type == "GO_HOME_ALL":
+            success = go_home_all_modbus()
+            current_message = "已发送全轴回零指令。" if success else "发送全轴回零指令失败。"
+            if success: motion_triggered = True
+            if not success: current_status = "error"
+
+        elif command_type == "PAUSE_MOVE":
+            success = pause_move_modbus()
+            current_message = "已发送暂停运动指令。" if success else "发送暂停运动指令失败。"
+            if not success: current_status = "error"
+        
+        elif command_type == "CONTINUE_MOVE":
+            success = continue_move_modbus()
+            current_message = "已发送继续运动指令。" if success else "发送继续运动指令失败。"
+            if not success: current_status = "error"
+
+        elif command_type == "STOP_MOVE":
+            success = stop_move_modbus()
+            current_message = "已发送停止运动指令。" if success else "发送停止运动指令失败。"
+            if not success: current_status = "error"
+
+        elif command_type == "MONITOR":
+            current_message = "状态监控指令 (前端将轮询状态)。"
+
+        elif command_type == "TEST_WRITE_GV0":
+            value = parameters.get("value")
+            if value is None: raise ValueError("GV0写入值缺失。")
+            success = write_gv0_test_value_modbus(float(value))
+            current_message = f"已向GV0写入测试值 {value}。" if success else "向GV0写入测试值失败。"
+            if not success: current_status = "error"
+
+        else:
+            current_message = f"未知或不支持的指令类型: {command_type}。"
+            current_status = "error"
+
+    except ValueError as e:
+        current_message = f"指令参数错误: {e}。"
+        current_status = "error"
+    except Exception as e:
+        log.error(f"执行指令 '{original_command_line}' (类型: {command_type}) 时发生异常: {e}", exc_info=True)
+        current_message = f"执行指令时发生内部错误: {e}。"
+        current_status = "error"
+
+    response_messages_list.append({"command": original_command_line, "status": current_status, "message": current_message})
+    
+    return current_status, motion_triggered
+
+def _execute_strict_command_action(client, normalized_command_string, response_messages_list, original_command_line):
+    """
+    这个辅助函数专门用于执行由normalize_command解析出来的严格格式指令字符串。
+    它将解析这些字符串并调用对应的Modbus函数。
+    """
+    global current_speed_setting 
+    
+    parts = normalized_command_string.split()
+    command_type_strict = parts[0]
+    
+    current_status = "success"
+    current_message = f"指令 '{original_command_line}' 执行成功。"
+    motion_triggered = False
+
+    try:
+        if command_type_strict == "AUTO_MODE":
+            success = set_robot_auto_mode_modbus()
+            current_message = "机器人已尝试切换到自动模式。" if success else "切换自动模式失败。"
+            if not success: current_status = "error"
+        
+        elif command_type_strict == "SET_SPEED":
+            speed_val = DEFAULT_SPEED 
+            if len(parts) == 2: 
+                try:
+                    speed_val = float(parts[1])
+                except ValueError:
+                    current_message = f"SET_SPEED指令参数格式错误，速度值应为数字，将使用默认值 {DEFAULT_SPEED}。"
+                    current_status = "warning" 
+            
+            current_speed_setting = speed_val 
+            if current_status != "warning": 
+                 current_message = f"已设置运动速度参数为 {current_speed_setting}。"
+            
+            success = set_move_speed_modbus(current_speed_setting)
+            if not success: 
+                current_status = "error"
+                current_message = "设置运动速度失败。"
+
+        elif command_type_strict == "MONITOR":
+            current_message = "前端状态轮询已触发。"
+            
+        elif command_type_strict == "TEST_WRITE_GV0":
+            if len(parts) == 2:
+                try:
+                    value = float(parts[1])
+                    success = write_gv0_test_value_modbus(value)
+                    current_message = f"已向GV0写入测试值 {value}。" if success else "向GV0写入测试值失败。"
+                    if not success: current_status = "error"
+                except ValueError:
+                    current_message = "TEST_WRITE_GV0指令参数格式错误，值应为数字。"
+                    current_command_status = "error"
+            else:
+                current_message = "TEST_WRITE_GV0指令格式错误，应为 'TEST_WRITE_GV0 <值>'。"
+                current_status = "error"
+        
+        elif command_type_strict == "GO_HOME_ALL":
+            success = go_home_all_modbus()
+            current_message = "已发送全轴回零指令。" if success else "发送全轴回零指令失败。"
+            if success: motion_triggered = True 
+            if not success: current_status = "error"
+
+        elif command_type_strict == "GO_HOME_J":
+            axis_id = int(parts[1]) # axis_id is part[1] for GO_HOME_J<id>
+            if not (1 <= axis_id <= 6):
+                current_message = "GO_HOME_J指令中的轴号无效，应为J1到J6。"
+                current_status = "error"
+            else:
+                success = go_home_single_axis_modbus(axis_id)
+                current_message = f"已发送J{axis_id}单轴回零指令。" if success else f"发送J{axis_id}单轴回零指令失败。"
+                if success: motion_triggered = True
+                if not success: current_status = "error"
+
+        elif command_type_strict == "PAUSE_MOVE":
+            success = pause_move_modbus()
+            current_message = "已发送暂停运动指令。" if success else "发送暂停运动指令失败。"
+            if not success: current_status = "error"
+        
+        elif command_type_strict == "CONTINUE_MOVE": 
+            success = continue_move_modbus()
+            current_message = "已发送继续运动指令。" if success else "发送继续运动指令失败。"
+            if not success: current_status = "error"
+
+        elif command_type_strict == "STOP_MOVE":
+            success = stop_move_modbus()
+            current_message = "已发送停止运动指令。" if success else "发送停止运动指令失败。"
+            if not success: current_status = "error"
+        
+        elif command_type_strict == "MOVE":
+            # MOVE指令需要处理 J<id> 或 X/Y/Z/A/B/C
+            axis_part = parts[1]
+            value = float(parts[2])
+            offsets_payload = {}
+            coordinate_type = 'joint' # Default for MOVE Jx
+            
+            if axis_part.startswith("J"): # Joint move
+                axis_id = int(axis_part[1:])
+                if not (1 <= axis_id <= 6):
+                    raise ValueError("MOVE指令中的轴号无效，应为J1到J6。")
+                offsets_payload[axis_id] = value
+                current_message = f"已解析关节J{axis_id}增量运动参数为 {value} 度。"
+            else: # Base coordinate move (X,Y,Z,A,B,C)
+                axis_name = axis_part.upper()
+                if axis_name not in ['X', 'Y', 'Z', 'A', 'B', 'C']:
+                    raise ValueError("MOVE指令中的坐标轴名称无效，应为X/Y/Z/A/B/C。")
+                offsets_payload[axis_name] = value
+                coordinate_type = 'base_coords'
+                current_message = f"已解析基坐标系 {axis_name} 轴增量运动参数为 {value}。"
+
+            # 启动运动
+            speed_set_ok = set_move_speed_modbus(current_speed_setting)
+            offset_set_ok = _send_incremental_offsets_modbus(client, offsets_payload, coordinate_type)
+
+            if speed_set_ok and offset_set_ok:
+                start_ok = start_incremental_move_modbus(coordinate_type)
+                if start_ok:
+                    current_message += " 运动已启动。"
+                    motion_triggered = True
+                else:
+                    current_message += " 启动运动失败。"
+                    current_status = "error"
+            else:
+                current_message += " 启动运动前设置参数失败。"
+                current_status = "error"
+        
+        else:
+            current_message = f"未知指令或指令格式错误: '{normalized_command_string}'。"
+            current_status = "error"
+
+    except ValueError as e:
+        current_message = f"指令 '{normalized_command_string}' 参数错误: {e}。"
+        current_status = "error"
+    except Exception as e:
+        log.error(f"执行严格指令 '{normalized_command_string}' 时发生异常: {e}", exc_info=True)
+        current_message = f"执行指令时发生内部错误: {e}。"
+        current_status = "error"
+    
+    # response_messages_list 已经在 handle_command 中处理，这里只返回状态和是否触发运动
+    return current_status, motion_triggered
+
 def open_browser():
     """
     在服务启动后，自动打开浏览器访问Web界面。
@@ -729,8 +1189,7 @@ def open_browser():
     host = '127.0.0.1' if SERVER_HOST == '0.0.0.0' else SERVER_HOST
     url = f"http://{host}:{SERVER_PORT}"
     webbrowser.open_new_tab(url)
-
-
+    
 # Flask 应用启动时运行的函数
 if __name__ == '__main__':
     # 使用线程计时器，在1秒后调用open_browser函数，确保Flask服务已启动
@@ -740,4 +1199,3 @@ if __name__ == '__main__':
     # 启动Flask应用
     app.run(debug=True, host=SERVER_HOST, port=SERVER_PORT)
     # host='0.0.0.0'允许从任何IP访问
-
