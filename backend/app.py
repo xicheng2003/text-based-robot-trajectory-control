@@ -22,51 +22,54 @@ from openai import APIStatusError, APIConnectionError, APITimeoutError
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 log = logging.getLogger(__name__)
 
+def is_frozen():
+    """ 检查程序是否被 PyInstaller 打包 """
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+
+
 def get_project_root():
     """
     获取项目的根目录，智能适应开发环境和打包后的环境。
     - 在开发模式下(运行.py)，这是 `backend` 目录的上一级。
     - 在打包后的程序中(.exe)，这是可执行文件所在的目录。
     """
-    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-        # 程序被 PyInstaller 打包，根目录是 .exe 所在的目录
+    if is_frozen():
         return os.path.dirname(sys.executable)
     else:
-        # 在开发模式下，根目录是当前脚本(app.py)所在目录(backend)的上一级
         return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
-# --- 全局路径定义 ---
-PROJECT_ROOT = get_project_root()
-log.info(f"项目根目录已确定为: {PROJECT_ROOT}")
 
-# --- Flask 应用初始化 (托管Vue App) ---
-# 前端静态文件夹的路径总是相对于项目根目录
-static_dir = os.path.join(PROJECT_ROOT, 'frontend', 'dist')
+# --- Flask 应用初始化 ---
+static_dir = None
+if is_frozen():
+    # 在打包后的程序中，静态文件位于_MEIPASS临时目录内
+    static_dir = os.path.join(sys._MEIPASS, 'frontend', 'dist')
+else:
+    # 在开发模式下，静态文件位于项目根目录下的 'frontend/dist'
+    static_dir = os.path.join(get_project_root(), 'frontend', 'dist')
+
 log.info(f"Flask 静态文件目录设置为: {static_dir}")
 app = Flask(__name__, static_folder=static_dir)
 
 
 # --- 全局变量和配置加载 ---
+
 modbus_client = None
-current_speed_setting = 100.0 # 默认速度
 
 def load_config():
     """
     加载 config.json 文件。
-    - 在开发模式下，它在 `backend` 子目录中。
-    - 在打包后的程序中，它与 .exe 在同一目录（即项目根目录）。
+    它总是相对于项目的根目录（对于.exe是其所在目录，对于.py是其所在目录）
     """
-    if getattr(sys, 'frozen', False):
-        # 打包后，配置文件在根目录
-        config_path = os.path.join(PROJECT_ROOT, 'config.json')
+    if is_frozen():
+        config_path = os.path.join(get_project_root(), 'config.json')
     else:
-        # 开发时，配置文件在 backend 子目录
-        config_path = os.path.join(PROJECT_ROOT, 'backend', 'config.json')
-    
+        config_path = os.path.join(get_project_root(), 'backend','config.json')
     log.info(f"正在从以下路径加载配置文件: {config_path}")
+        
 
     if not os.path.exists(config_path):
-        log.critical(f"错误：配置文件 '{config_path}' 未找到。程序退出。")
+        log.critical(f"错误：配置文件 '{config_path}' 未找到。请确保 config.json 与程序在同一目录下。程序退出。")
         sys.exit(1)
         
     with open(config_path, 'r', encoding='utf-8') as f:
