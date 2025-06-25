@@ -9,6 +9,8 @@ import struct
 import time
 import logging
 import re # 导入正则表达式模块
+import threading # 用于创建延迟执行的线程 以确保在Flask服务完全启动
+import webbrowser # 用于控制浏览器 待服务启动后自动打开网页
 
 # 配置日志，设置为INFO级别，便于查看关键操作，DEBUG级别用于更详细的Modbus通信日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -718,7 +720,24 @@ def handle_command():
 
     return jsonify(final_response)
 
+
+def open_browser():
+    """
+    在服务启动后，自动打开浏览器访问Web界面。
+    """
+    # 如果host是'0.0.0.0'，浏览器需要访问'127.0.0.1'
+    host = '127.0.0.1' if SERVER_HOST == '0.0.0.0' else SERVER_HOST
+    url = f"http://{host}:{SERVER_PORT}"
+    webbrowser.open_new_tab(url)
+
+
 # Flask 应用启动时运行的函数
 if __name__ == '__main__':
+    # 使用线程计时器，在1秒后调用open_browser函数，确保Flask服务已启动
+    if not os.environ.get("WERKZEUG_RUN_MAIN"): # 防止在Flask的debug模式下执行两次
+        threading.Timer(1, open_browser).start()
+    
+    # 启动Flask应用
     app.run(debug=True, host=SERVER_HOST, port=SERVER_PORT)
     # host='0.0.0.0'允许从任何IP访问
+
