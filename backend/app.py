@@ -12,6 +12,7 @@ import logging
 import re
 import threading
 import webbrowser
+import socket
 
 # LLM 相关的导入
 from openai import OpenAI
@@ -693,6 +694,17 @@ def _wait_for_motion_completion(client, timeout=30, poll_interval=0.5):
 
 
 # --- Flask 路由和API ---
+@app.route('/api/server_info', methods=['GET'])
+def get_server_info_api():
+    """提供服务器局域网IP和端口的API"""
+    local_ip = get_local_ip()
+    server_port = CONFIG.get('server', {}).get('port', 5000) # 从配置中获取端口
+
+    return jsonify({
+        "status": "success",
+        "ip": local_ip,
+        "port": server_port
+    })
 
 @app.route('/api/status', methods=['GET'])
 def get_status_api():
@@ -1147,6 +1159,27 @@ def open_browser():
     """自动打开浏览器"""
     host = '127.0.0.1' if SERVER_HOST == '0.0.0.0' else SERVER_HOST
     webbrowser.open_new_tab(f"http://{host}:{SERVER_PORT}")
+
+def get_local_ip():
+    """
+    尝试获取用于与外部通信的本机局域网IP地址。
+    如果失败，返回127.0.0.1作为备选。
+    注意：如果有多张网卡或复杂的网络配置，此方法可能不准确。
+    """
+    try:
+        # 连接到一个外部地址（不发送数据），这会强制操作系统选择一个用于路由的本地接口
+        # 使用Google DNS 8.8.8.8 是一个常见的做法，它只是用来触发路由查找
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80)) 
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        # 备选方案：获取主机名并解析。在某些配置下可能返回127.0.0.1
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except Exception:
+            return "127.0.0.1" # 最后的备选
 
 if __name__ == '__main__':
     if not os.environ.get("WERKZEUG_RUN_MAIN"):
