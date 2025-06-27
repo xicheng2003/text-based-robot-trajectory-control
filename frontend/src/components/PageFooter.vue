@@ -1,74 +1,98 @@
 <script setup lang="ts">
-// 我们需要一个 GitHub 图标，从已经安装的 lucide-vue-next 库中导入
-import { Github } from 'lucide-vue-next'
+// 这个组件现在不需要任何图标导入了
+const REPO_URL = "https://github.com/xicheng2003/text-based-robot-trajectory-control";
+const APP_VERSION = "V2.1.8-release";
+const currentYear = new Date().getFullYear();
 </script>
 
 <template>
-  <!-- 
-    整体设计思路:
-    - 使用 border-t 创建一个优雅的顶部分隔线。
-    - 在暗黑模式下，背景色和文字颜色会自动适应。
-    - 使用 Grid 布局创建三列，在移动端 (md 以下) 会自动变为单列堆叠。
+  <!--
+    核心优化:
+    - 使用 dark: 前缀为所有颜色添加了暗色模式的变体。
+    - 背景、文字、边框颜色现在都能自动适应主题切换。
   -->
-  <footer class="w-full mt-12 border-t border-border/40 py-8 text-sm">
-    <div class="container mx-auto grid grid-cols-1 md:grid-cols-3 gap-8">
+  <footer class="mt-12 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800/50">
+    <div class="container mx-auto px-6 lg:px-8">
 
-      <!-- 第一列: 学校与项目信息 -->
-      <div class="flex flex-col items-center md:items-start text-center md:text-left">
-        <div class="flex items-center gap-3 mb-3">
-          <img src="https://www.gdut.edu.cn/images2020/footer-logo2.png" alt="GDUT_Logo" class="h-12 w-12 object-contain">
-          <div>
-            <p class="font-semibold text-lg text-foreground">广东工业大学</p>
-            <p class="text-xs text-muted-foreground">Guangdong University of Technology</p>
+      <!--
+        上层内容区:
+        - 布局调整为在桌面端为三列，About部分更宽。
+        - grid-cols-1 在移动端堆叠，md:grid-cols-4 在中等屏幕上为四栏布局，About占两栏。
+      -->
+      <div class="py-16 grid grid-cols-1 md:grid-cols-4 gap-12 text-sm">
+
+
+        <!-- 第三列: 致谢 (已调整布局) -->
+        <div>
+          <h4 class="font-semibold text-slate-900 dark:text-white mb-4">致谢</h4>
+          <div class="text-slate-600 dark:text-slate-400 space-y-3 leading-relaxed">
+            <p>由 Xicheng2003 用 <span class="text-red-500">❤️</span> 制作</p>
+            <p class="text-xs text-slate-500 dark:text-slate-500">
+              与 Pei Zhijie, Liu Jinhang, Lin Taimin 合作完成
+            </p>
+            <!-- 核心优化: 分割线上移，将技术驱动信息作为一个整体 -->
+            <div class="pt-3 border-t border-slate-200 dark:border-slate-800/50 space-y-2">
+              <a href="https://www.deepseek.com" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-slate-600 dark:text-slate-400 hover:text-sky-500 dark:hover:text-sky-400 transition-colors">
+                <span class="text-xs">自然语言处理由</span>
+                <img src="https://cdn.deepseek.com/logo.png?x-image-process=image%2Fresize%2Cw_1920" alt="Deepseek Logo" class="h-3.5" />
+                <span class="text-xs">驱动</span>
+              </a>
+              <p class="text-xs text-slate-600 dark:text-slate-400">
+                页面由 Vue 3, Vite & shadcn/ui 强力驱动
+              </p>
+            </div>
           </div>
         </div>
-        <p class="text-muted-foreground">
-          生产实习实训项目：一个基于文本与自然语言的机器人轨迹运动控制平台
-        </p>
+
+        <!-- 第二列: 链接与许可 (已合并) -->
+        <div>
+          <h4 class="font-semibold text-slate-900 dark:text-white mb-4">相关链接</h4>
+          <ul class="space-y-3">
+            <li><a :href="REPO_URL" target="_blank" rel="noopener noreferrer" class="text-slate-600 dark:text-slate-400 hover:text-sky-500 dark:hover:text-sky-400 transition-colors">项目源码</a></li>
+            <li><a :href="`${REPO_URL}/releases`" target="_blank" rel="noopener noreferrer" class="text-slate-600 dark:text-slate-400 hover:text-sky-500 dark:hover:text-sky-400 transition-colors">最新版本</a></li>
+            <li><a :href="`${REPO_URL}/issues`" target="_blank" rel="noopener noreferrer" class="text-slate-600 dark:text-slate-400 hover:text-sky-500 dark:hover:text-sky-400 transition-colors">报告问题</a></li>
+          </ul>
+
+          <h4 class="font-semibold text-slate-900 dark:text-white mb-4 mt-8">开源许可</h4>
+          <ul class="space-y-3">
+            <li>
+                <a :href="`${REPO_URL}/blob/main/LICENSE`" target="_blank" rel="noopener noreferrer" class="text-slate-600 dark:text-slate-400 hover:text-sky-500 dark:hover:text-sky-400 transition-colors">许可证 (MIT)</a>
+            </li>
+          </ul>
+        </div>
+
+
+        <!-- 第三列: 关于项目 (md屏幕下占两栏) -->
+        <div class="md:col-span-2">
+          <h4 class="font-bold text-slate-900 dark:text-white text-base mb-4">
+            关于本项目
+          </h4>
+          <p class="text-slate-600 dark:text-slate-400 leading-relaxed">
+            该项目源于一次富有挑战的大学实习项目，是对先进机器人技术的一次实践性探索。我们基于 Modbus TCP 协议，在人机交互领域开拓了新的前沿，实现了直观的、基于文本的机器人轨迹控制。
+          </p>
+          <div class="flex items-center gap-3 mt-4 pt-4 border-t border-slate-200 dark:border-slate-800/50">
+            <img src="https://www.gdut.edu.cn/images2020/footer-logo2.png" alt="GDUT_Logo" class="h-12 w-12 object-contain bg-white rounded-full p-1.5">
+            <div>
+              <p class="text-sm text-slate-600 dark:text-slate-400">该项目亦是广东工业大学的一项生产实习实训项目成果</p>
+              <p class="text-xs text-slate-500 dark:text-slate-500">Guangdong University of Technology</p>
+            </div>
+          </div>
+        </div>
+
+
+
       </div>
 
-      <!-- 第二列: 关键链接 -->
-      <div class="text-center">
-        <h3 class="font-semibold text-foreground mb-4">相关链接</h3>
-        <ul class="space-y-2">
-          <li>
-            <a 
-              href="https://github.com/xicheng2003/text-based-robot-trajectory-control" 
-              target="_blank" 
-              rel="noopener noreferrer"
-              class="group inline-flex items-center gap-2 text-muted-foreground hover:text-primary transition-colors"
-            >
-              <Github class="h-4 w-4" />
-              <span>查看项目源码</span>
-              <span class="opacity-0 group-hover:opacity-100 transition-opacity text-xs">→</span>
-            </a>
-          </li>
-           <li>
-            <a 
-              href="https://www.deepseek.com" 
-              target="_blank" 
-              rel="noopener noreferrer"
-              class="group inline-flex items-center gap-2 text-muted-foreground hover:text-primary transition-colors"
-            >
-              <span>自然语言处理由 </span>
-              <img src="https://cdn.deepseek.com/logo.png?x-image-process=image%2Fresize%2Cw_1920" alt="Deepseek Logo" class="h-4" />
-              <span> 驱动</span>
-            </a>
-          </li>
-        </ul>
+      <!-- 下层版权区 -->
+      <div class="flex flex-col sm:flex-row justify-between items-center border-t border-slate-200 dark:border-slate-800 py-6">
+        <div class="text-sm text-slate-500 dark:text-slate-400">
+          Copyright © {{ currentYear }} Text-based Robot Trajectory Control. All Rights Reserved.
+        </div>
+        <!-- 核心优化: 将 GitHub 图标替换为版本号文本 -->
+        <div class="text-sm text-slate-500 dark:text-slate-400 mt-4 sm:mt-0">
+          {{ APP_VERSION }}
+        </div>
       </div>
-
-      <!-- 第三列: 致谢与版权 -->
-      <div class="text-center md:text-right text-muted-foreground">
-        <h3 class="font-semibold text-foreground mb-4">致谢</h3>
-        <p>Made with <span class="text-red-500">❤️</span> by Lin Xicheng (xicheng2003)</p>
-        <p>In collaboration with Pei Zhijie, Liu Jinhang and Lin Taimin.</p>
-        <p class="mt-2 text-xs">
-          由 Vue 3, Vite, Tailwind CSS & shadcn/ui 强力驱动
-        </p>
-        <p class="mt-4 text-xs">&copy; 2025 ALL RIGHTS RESERVED.</p>
-      </div>
-
     </div>
   </footer>
 </template>
