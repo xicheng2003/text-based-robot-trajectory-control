@@ -3,7 +3,8 @@ import { ref } from 'vue';
 import ThemeToggle from './ThemeToggle.vue';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
-import { Share2Icon, Loader2 } from 'lucide-vue-next';
+// 从 lucide-vue-next 导入 SettingsIcon 和 Share2Icon
+import { Share2Icon, SettingsIcon, Loader2 } from 'lucide-vue-next';
 import QrcodeVue from 'qrcode.vue';
 
 const showShareModal = ref(false);
@@ -74,6 +75,14 @@ const copyUrlToClipboard = async () => {
                  <Share2Icon class="h-5 w-5" />
                  <span class="sr-only">分享</span>
             </Button>
+            <!-- 设置按钮 -->
+            <!-- 使用 router-link 包裹按钮，确保点击后导航到设置页面 -->
+            <router-link to="/settings">
+                <Button variant="outline" size="icon">
+                    <SettingsIcon class="h-5 w-5" />
+                    <span class="sr-only">设置</span>
+                </Button>
+            </router-link>
 
             <!-- 主题切换按钮 -->
             <ThemeToggle />
