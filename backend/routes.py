@@ -6,7 +6,7 @@ from .robot_controller import RobotController
 from .command_parser import CommandParser
 from .config import MOTION_CONFIG
 from .utils import get_local_ip
-
+from .config import load_config, save_config
 log = logging.getLogger(__name__)
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -157,3 +157,63 @@ def execute_strict_command(robot: RobotController, normalized_cmd: str) -> (bool
         
     log.warning(f"接收到未知的严格指令类型: {cmd_type}")
     return False, False
+
+@api_bp.route('/settings', methods=['GET'])
+def get_settings():
+    """
+    获取当前的配置信息。
+    """
+    log.info("请求获取当前配置...")
+    try:
+        current_config = load_config()
+        # 出于安全考虑，可以在返回前移除敏感信息，例如API密钥
+        # if 'llm_config' in current_config and 'api_key' in current_config['llm_config']:
+        #     current_config['llm_config']['api_key'] = '********' 
+        return jsonify({"status": "success", "settings": current_config})
+    except Exception as e:
+        log.error(f"读取配置文件失败: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": "无法读取服务器配置。"}), 500
+
+@api_bp.route('/settings', methods=['POST'])
+def update_settings():
+    """
+    更新并保存配置信息。
+    """
+    log.info("收到配置更新请求...")
+    new_settings = request.get_json()
+    if not new_settings:
+        return jsonify({"status": "error", "message": "请求体不能为空。"}), 400
+
+    # 注意：不允许通过此API更改服务器端口，因为这需要重启
+    server_port_before = load_config().get('server', {}).get('port')
+    server_port_after = new_settings.get('server', {}).get('port')
+    if server_port_before != server_port_after:
+        log.warning("检测到服务器端口更改请求，此操作需要重启应用，将被忽略。")
+        new_settings['server']['port'] = server_port_before
+
+    success, error_msg = save_config(new_settings)
+    if not success:
+        return jsonify({"status": "error", "message": f"保存配置文件失败: {error_msg}"}), 500
+
+    # 保存成功后，动态更新应用中的配置实例
+    log.info("配置已保存，正在动态更新应用实例...")
+    try:
+        # 重新加载配置
+        updated_config = load_config()
+        robot_cfg = updated_config.get('robot', {})
+        motion_cfg = updated_config.get('motion', {})
+        llm_cfg = updated_config.get('llm_config', {})
+
+        # 重新初始化控制器和解析器
+        current_app.config['robot_controller'] = RobotController(robot_cfg, motion_cfg)
+        current_app.config['command_parser'] = CommandParser(llm_cfg)
+        
+        log.info("RobotController 和 CommandParser 已使用新配置重新初始化。")
+        return jsonify({"status": "success", "message": "配置已成功更新并应用。"})
+
+    except Exception as e:
+        log.critical(f"动态更新配置时发生严重错误: {e}", exc_info=True)
+        return jsonify({
+            "status": "error", 
+            "message": "配置已保存，但动态应用新配置时发生错误。为确保所有更改生效，建议重启应用。"
+        }), 500
